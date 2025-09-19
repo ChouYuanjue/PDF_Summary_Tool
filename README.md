@@ -2,7 +2,7 @@
 
 一个强大的Python工具，用于将PDF文档转换为结构化文本，并利用先进的AI模型生成高质量的内容总结和关键词提炼。
 
-本项目大量参考了项目[NoUnique/vlm-ocr-pipeline](https://github.com/NoUnique/vlm-ocr-pipeline)的实现逻辑，同时在项目[ChouYuanjue/Informal_Notes_on_Mathematics](https://github.com/ChouYuanjue/Informal_Notes_on_Mathematics)上进行了实验，可移步该项目查看本项目的处理效果。
+本项目大量参考了项目[NoUnique/vlm-ocr-pipeline](https://github.com/NoUnique/vlm-ocr-pipeline)的实现逻辑，同时在项目[ChouYuanjue/Informal_Notes_on_Mathematics](https://github.com/ChouYuanjue/Informal_Notes_on_Mathematics)上进行了实验，可移步该项目查看本项目的处理效果。其中，`md_full-page`文件夹存储的是通过整页传输方法处理的结果，`md_crop-region`文件夹存储的是通过分区方法处理的结果。
 
 ## 功能特点
 
