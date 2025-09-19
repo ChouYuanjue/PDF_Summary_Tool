@@ -1,0 +1,23 @@
+# PDF处理和图像处理
+PyMuPDF>=1.24.0
+pdf2image>=1.16.3
+Pillow>=10.0.0
+opencv-python>=4.7.0.72
+
+# 机器学习和深度学习
+torch>=2.6.0
+torchvision>=0.16.0
+ultralytics>=8.2.0
+huggingface_hub>=0.22.0
+
+# Gemini API
+google-generativeai>=0.7.2
+
+# 工具库
+numpy>=1.26.4
+pyyaml>=6.0.1
+python-dotenv>=1.0.0
+requests>=2.31.0
+
+# OpenAI API
+openai>=1.0.0
