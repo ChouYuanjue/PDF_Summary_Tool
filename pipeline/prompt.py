@@ -82,17 +82,21 @@ class PromptManager:
         except Exception as e:
             logger.error(f"Error loading prompts: {e}")
     
-    def get_prompt(self, prompt_name: str, **kwargs) -> str:
+    def get_prompt(self, prompt_name: str, *args, **kwargs) -> str:
         """
         Get a prompt by name with optional template variables
         
         Args:
             prompt_name: Name of the prompt to retrieve
+            *args: Ignored for compatibility
             **kwargs: Template variables to substitute
             
         Returns:
             Formatted prompt string
         """
+        # Log warning if extra positional args are passed
+        if args:
+            logger.warning(f"get_prompt called with extra positional arguments: {args}. Only first arg (prompt_name) is used.")
         # Check if prompt exists
         if prompt_name in self.prompts:
             prompt_template = self.prompts[prompt_name].get('prompt', '')

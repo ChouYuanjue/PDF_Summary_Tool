@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 class OpenAIClient:
     """OpenAI VLM API client for OCR text processing"""
     
-    def __init__(self, model: str = "gpt-5-nano", api_key: Optional[str] = None, base_url: Optional[str] = None):
+    def __init__(self, model: str = "gpt-5-nano", api_key: Optional[str] = None, base_url: Optional[str] = None, fallback_models: Optional[list] = None):
         """
         Initialize OpenAI API client
         
@@ -32,8 +32,10 @@ class OpenAIClient:
             model: Model to use (can be OpenRouter format like 'openai/gpt-4')
             api_key: API key (if not provided, reads from environment)
             base_url: Base URL for API (for OpenRouter or custom endpoints)
+            fallback_models: List of fallback models to try if primary model fails
         """
         self.model = model
+        self.fallback_models = fallback_models or ["deepseek/deepseek-chat", "gpt-3.5-turbo"]
         self.api_key = api_key or os.environ.get("OPENAI_API_KEY")
         self.base_url = base_url or os.environ.get("OPENAI_BASE_URL")
         
@@ -46,7 +48,7 @@ class OpenAIClient:
         
         self.client = self._setup_openai_client()
     
-    def _setup_openai_client(self) -> Optional[OpenAI]:
+    def _setup_openai_client(self) -> Optional[Any]:
         """Setup OpenAI API client"""
         try:
             if not self.api_key:
@@ -67,6 +69,41 @@ class OpenAIClient:
     def is_available(self) -> bool:
         """Check if OpenAI API client is available"""
         return self.client is not None
+    
+    def _try_with_fallback_model(self, operation_func, *args, **kwargs):
+        """Try an operation with fallback models if it fails"""
+        original_model = self.model
+        
+        # Try with current model first
+        try:
+            return operation_func(*args, **kwargs)
+        except Exception as e:
+            logger.warning(f"Operation failed with model {self.model}: {e}")
+            
+            # Try fallback models
+            for fallback_model in self.fallback_models:
+                if fallback_model == original_model:
+                    continue
+                    
+                logger.info(f"Trying with fallback model: {fallback_model}")
+                try:
+                    # Temporarily change model
+                    self.model = fallback_model
+                    # Re-setup client if needed
+                    if not self.client:
+                        self.client = self._setup_openai_client()
+                    
+                    result = operation_func(*args, **kwargs)
+                    logger.info(f"Success with fallback model: {fallback_model}")
+                    return result
+                    
+                except Exception as fallback_e:
+                    logger.warning(f"Fallback model {fallback_model} also failed: {fallback_e}")
+                    continue
+            
+            # All models failed, restore original model
+            self.model = original_model
+            raise e
         
     def _clean_response_text(self, text: str) -> str:
         """Clean response text by removing content wrapped in</think> and</think>"""
@@ -147,7 +184,87 @@ class OpenAIClient:
                 temperature=0.1
             )
             
-            text = response.choices[0].message.content.strip()
+            # Check if response has valid choices
+            if not hasattr(response, 'choices') or response.choices is None:
+                logger.error("No choices in OpenAI response for extract_text - response appears invalid")
+                # Debug: print response structure
+                logger.error(f"Response type: {type(response)}")
+                if hasattr(response, '__dict__'):
+                    logger.error(f"Response dict: {response.__dict__}")
+                
+                # Try to get raw response or error details
+                try:
+                    raw_response = response.model_dump() if hasattr(response, 'model_dump') else str(response)
+                    logger.error(f"Raw response: {raw_response}")
+                except Exception as e:
+                    logger.error(f"Could not get raw response: {e}")
+                
+                # Check for error fields
+                if hasattr(response, '__pydantic_extra__') and response.__pydantic_extra__:
+                    logger.error(f"Extra fields: {response.__pydantic_extra__}")
+                    if 'error' in response.__pydantic_extra__:
+                        logger.error(f"API Error: {response.__pydantic_extra__['error']}")
+                
+                # If response is completely empty/invalid, treat as API failure
+                if all(getattr(response, field, None) is None for field in ['id', 'choices', 'created', 'model', 'object']):
+                    logger.error("Response appears to be completely invalid - possible API format mismatch")
+                    return {
+                        'type': region_info['type'],
+                        'coords': region_info['coords'],
+                        'text': '[INVALID_RESPONSE]',
+                        'confidence': 0.0,
+                        'error': 'invalid_response'
+                    }
+                
+                # Try alternative response formats
+                if hasattr(response, 'text') and response.text:
+                    logger.info("Found text field in response for extract_text, using as fallback")
+                    return {
+                        'type': region_info['type'],
+                        'coords': region_info['coords'],
+                        'text': response.text.strip(),
+                        'confidence': region_info.get('confidence', 1.0)
+                    }
+                elif hasattr(response, 'content') and response.content:
+                    logger.info("Found content field in response for extract_text, using as fallback")
+                    return {
+                        'type': region_info['type'],
+                        'coords': region_info['coords'],
+                        'text': response.content.strip(),
+                        'confidence': region_info.get('confidence', 1.0)
+                    }
+                else:
+                    return {
+                        'type': region_info['type'],
+                        'coords': region_info['coords'],
+                        'text': '[NO_CHOICES]',
+                        'confidence': 0.0,
+                        'error': 'no_choices'
+                    }
+            
+            choice = response.choices[0]
+            if not hasattr(choice, 'message') or choice.message is None:
+                logger.error("No message in OpenAI response choice for extract_text")
+                return {
+                    'type': region_info['type'],
+                    'coords': region_info['coords'],
+                    'text': '[NO_MESSAGE]',
+                    'confidence': 0.0,
+                    'error': 'no_message'
+                }
+            
+            text = choice.message.content
+            if text is None:
+                logger.error("Content is None in OpenAI response for extract_text")
+                return {
+                    'type': region_info['type'],
+                    'coords': region_info['coords'],
+                    'text': '[CONTENT_NONE]',
+                    'confidence': 0.0,
+                    'error': 'content_none'
+                }
+            
+            text = text.strip()
             
             result = {
                 'type': region_info['type'],
@@ -239,7 +356,85 @@ class OpenAIClient:
                 temperature=0.1
             )
             
-            response_text = response.choices[0].message.content.strip()
+            # Check if response has valid choices
+            if not hasattr(response, 'choices') or response.choices is None:
+                logger.error("No choices in OpenAI response for process_special_region - response appears invalid")
+                # Debug: print response structure
+                logger.error(f"Response type: {type(response)}")
+                if hasattr(response, '__dict__'):
+                    logger.error(f"Response dict: {response.__dict__}")
+                
+                # Try to get raw response or error details
+                try:
+                    raw_response = response.model_dump() if hasattr(response, 'model_dump') else str(response)
+                    logger.error(f"Raw response: {raw_response}")
+                except Exception as e:
+                    logger.error(f"Could not get raw response: {e}")
+                
+                # Check for error fields
+                if hasattr(response, '__pydantic_extra__') and response.__pydantic_extra__:
+                    logger.error(f"Extra fields: {response.__pydantic_extra__}")
+                    if 'error' in response.__pydantic_extra__:
+                        logger.error(f"API Error: {response.__pydantic_extra__['error']}")
+                
+                # If response is completely empty/invalid, treat as API failure
+                if all(getattr(response, field, None) is None for field in ['id', 'choices', 'created', 'model', 'object']):
+                    logger.error("Response appears to be completely invalid - possible API format mismatch")
+                    return {
+                        'type': region_info['type'],
+                        'coords': region_info['coords'],
+                        'content': '[INVALID_RESPONSE]',
+                        'analysis': 'Invalid API response',
+                        'confidence': 0.0,
+                        'error': 'invalid_response'
+                    }
+                
+                # Try alternative response formats
+                if hasattr(response, 'text') and response.text:
+                    logger.info("Found text field in response for process_special_region, using as fallback")
+                    cleaned_text = self._clean_response_text(response.text.strip())
+                    parsed_result = self._parse_openai_response(cleaned_text, region_info)
+                    return parsed_result
+                elif hasattr(response, 'content') and response.content:
+                    logger.info("Found content field in response for process_special_region, using as fallback")
+                    cleaned_text = self._clean_response_text(response.content.strip())
+                    parsed_result = self._parse_openai_response(cleaned_text, region_info)
+                    return parsed_result
+                else:
+                    return {
+                        'type': region_info['type'],
+                        'coords': region_info['coords'],
+                        'content': '[NO_CHOICES]',
+                        'analysis': 'No choices in response',
+                        'confidence': 0.0,
+                        'error': 'no_choices'
+                    }
+            
+            choice = response.choices[0]
+            if not hasattr(choice, 'message') or choice.message is None:
+                logger.error("No message in OpenAI response choice for process_special_region")
+                return {
+                    'type': region_info['type'],
+                    'coords': region_info['coords'],
+                    'content': '[NO_MESSAGE]',
+                    'analysis': 'No message in response',
+                    'confidence': 0.0,
+                    'error': 'no_message'
+                }
+            
+            response_text = choice.message.content
+            if response_text is None:
+                logger.error("Content is None in OpenAI response for process_special_region")
+                return {
+                    'type': region_info['type'],
+                    'coords': region_info['coords'],
+                    'content': '[CONTENT_NONE]',
+                    'analysis': 'Content is None',
+                    'confidence': 0.0,
+                    'error': 'content_none'
+                }
+            
+            response_text = response_text.strip()
             # Clean response text
             cleaned_text = self._clean_response_text(response_text)
             parsed_result = self._parse_openai_response(cleaned_text, region_info)
@@ -304,7 +499,66 @@ class OpenAIClient:
                 temperature=0.1
             )
             
-            response_text = response.choices[0].message.content.strip()
+            # Check if response has valid choices
+            if not hasattr(response, 'choices') or response.choices is None:
+                logger.error("No choices in OpenAI response - response appears invalid")
+                # Debug: print response structure
+                logger.error(f"Response type: {type(response)}")
+                if hasattr(response, '__dict__'):
+                    logger.error(f"Response dict: {response.__dict__}")
+                
+                # Try to get raw response or error details
+                try:
+                    raw_response = response.model_dump() if hasattr(response, 'model_dump') else str(response)
+                    logger.error(f"Raw response: {raw_response}")
+                except Exception as e:
+                    logger.error(f"Could not get raw response: {e}")
+                
+                # Check for error fields
+                if hasattr(response, '__pydantic_extra__') and response.__pydantic_extra__:
+                    logger.error(f"Extra fields: {response.__pydantic_extra__}")
+                    # Check if there's an error message in extra fields
+                    if 'error' in response.__pydantic_extra__:
+                        logger.error(f"API Error: {response.__pydantic_extra__['error']}")
+                
+                # If response is completely empty/invalid, treat as API failure
+                if all(getattr(response, field, None) is None for field in ['id', 'choices', 'created', 'model', 'object']):
+                    logger.error("Response appears to be completely invalid - possible API format mismatch")
+                    return {"corrected_text": text, "confidence": 0.0, "error": "invalid_response"}
+                
+                # Try alternative response formats (some OpenRouter models may return different structure)
+                if hasattr(response, 'text') and response.text:
+                    logger.info("Found text field in response, using as fallback")
+                    cleaned_text = self._clean_response_text(response.text.strip())
+                    sm = difflib.SequenceMatcher(None, text, cleaned_text)
+                    confidence = sm.ratio()
+                    return {
+                        "corrected_text": cleaned_text,
+                        "confidence": confidence
+                    }
+                elif hasattr(response, 'content') and response.content:
+                    logger.info("Found content field in response, using as fallback")
+                    cleaned_text = self._clean_response_text(response.content.strip())
+                    sm = difflib.SequenceMatcher(None, text, cleaned_text)
+                    confidence = sm.ratio()
+                    return {
+                        "corrected_text": cleaned_text,
+                        "confidence": confidence
+                    }
+                else:
+                    return {"corrected_text": text, "confidence": 0.0, "error": "no_choices"}
+            
+            choice = response.choices[0]
+            if not hasattr(choice, 'message') or choice.message is None:
+                logger.error("No message in OpenAI response choice")
+                return {"corrected_text": text, "confidence": 0.0, "error": "no_message"}
+            
+            response_text = choice.message.content
+            if response_text is None:
+                logger.error("Content is None in OpenAI response")
+                return {"corrected_text": text, "confidence": 0.0, "error": "content_none"}
+            
+            response_text = response_text.strip()
             # Clean response text
             cleaned_text = self._clean_response_text(response_text)
             

@@ -34,7 +34,7 @@ def setup_llm_clients(api_key=None, model=None):
     openrouter_api_key = os.environ.get("OPENROUTER_API_KEY")
     if openrouter_api_key:
         openrouter_client = OpenAIClient(
-            model='deepseek/deepseek-chat-v3.1:free',
+            model='deepseek/deepseek-chat-v3.1',
             api_key=openrouter_api_key,
             base_url='https://openrouter.ai/api/v1'
         )
