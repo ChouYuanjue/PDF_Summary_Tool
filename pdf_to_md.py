@@ -102,6 +102,11 @@ class PDFProcessor:
     
     def _setup_layout_model(self) -> DocLayoutYOLO:
         """设置DocLayout-YOLO模型"""
+        # 如果使用full-page模式，不需要加载布局检测模型
+        if self.use_full_page:
+            logger.info("使用full-page模式，跳过DocLayout-YOLO模型加载")
+            return None
+            
         try:
             model = DocLayoutYOLO()
             logger.info("DocLayout-YOLO模型加载成功")
